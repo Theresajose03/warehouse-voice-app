@@ -5,3 +5,4 @@ pyttsx3
 speechrecognition
 rapidfuzz
 openai
+bcrypt
