@@ -1,27 +1,30 @@
 import streamlit as st
 import pandas as pd
 import speech_recognition as sr
-import pyttsx3
 import bcrypt
 from rapidfuzz import fuzz
 from sqlalchemy import create_engine
+from gtts import gTTS
+import os
 
 # Load warehouse data
 DATA_PATH = "cleaned_voice_picking_data.xlsx"
-df = pd.read_excel(DATA_PATH)
+try:
+    df = pd.read_excel(DATA_PATH)
+except FileNotFoundError:
+    st.error("Data file not found. Please upload `cleaned_voice_picking_data.xlsx`.")
 
 # User authentication (stored in an SQLite database)
 DATABASE_URL = "sqlite:///users.db"
 
 # Initialize text-to-speech engine
-engine = pyttsx3.init()
-engine.setProperty('rate', 150)
-engine.setProperty('volume', 1.0)
 
 def speak(text):
-    """Convert text to speech."""
-    engine.say(text)
-    engine.runAndWait()
+    """Convert text to speech using Google TTS. and play it"""
+    tts = gTTS(text=text, lang="en")
+    audio_file = "response.mp3"
+    tts.save(audio_file)
+    st.audio(audio_file, format="audio/mp3")  # Streamlit will play the audio
 
 def recognize_speech():
     """Capture voice input and return recognized text."""
@@ -76,6 +79,21 @@ def register_user(username, password):
     """Register a new user."""
     engine = create_engine(DATABASE_URL)
     hashed_pw = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+    
+    # Create a table if it doesn't exist
+    with engine.connect() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                Username TEXT PRIMARY KEY,
+                Password TEXT
+            )
+        """)
+
+    # Check if the user already exists
+    users = pd.read_sql("SELECT * FROM users", con=engine)
+    if username in users["Username"].values:
+        return "User already exists. Try logging in."
+
     user_data = pd.DataFrame({"Username": [username], "Password": [hashed_pw]})
     user_data.to_sql("users", con=engine, if_exists="append", index=False)
     return "User registered successfully."
@@ -83,6 +101,16 @@ def register_user(username, password):
 def authenticate_user(username, password):
     """Authenticate user."""
     engine = create_engine(DATABASE_URL)
+
+    # Ensure the database exists
+    with engine.connect() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                Username TEXT PRIMARY KEY,
+                Password TEXT
+            )
+        """)
+
     users = pd.read_sql("SELECT * FROM users", con=engine)
     user = users[users["Username"] == username]
     
@@ -94,23 +122,33 @@ def authenticate_user(username, password):
 st.title("📦 Voice-Based Warehouse System")
 
 # **User Authentication**
-username = st.text_input("👤 Username")
-password = st.text_input("🔑 Password", type="password")
-if st.button("Login"):
+st.sidebar.header("User Authentication")
+username = st.sidebar.text_input("👤 Username")
+password = st.sidebar.text_input("🔑 Password", type="password")
+
+if st.sidebar.button("Login"):
     if authenticate_user(username, password):
-        st.success("Login successful!")
+        st.session_state["authenticated"] = True
+        st.sidebar.success("Login successful!")
     else:
-        st.error("Invalid credentials.")
+        st.sidebar.error("Invalid credentials.")
 
-if st.button("Register"):
-    register_user(username, password)
-    st.success("User registered successfully!")
+if st.sidebar.button("Register"):
+    register_message = register_user(username, password)
+    st.sidebar.success(register_message)
 
-# **Text or Voice Input**
-manual_command = st.text_input("📌 Type a command manually (or use voice)", key="manual_input")
-if st.button("Submit Text Command"):
-    process_command(manual_command)
+# **Show Warehouse Functions Only If Logged In**
+if "authenticated" in st.session_state and st.session_state["authenticated"]:
+    st.subheader("Warehouse Assistant")
 
-if st.button("🎤 Start Listening"):
-    command = recognize_speech()
-    process_command(command)
+    # **Text or Voice Input**
+    manual_command = st.text_input("📌 Type a command manually (or use voice)", key="manual_input")
+    if st.button("Submit Text Command"):
+        process_command(manual_command)
+
+    if st.button("🎤 Start Listening"):
+        command = recognize_speech()
+        process_command(command)
+
+else:
+    st.warning("Please log in to access warehouse functions.")
